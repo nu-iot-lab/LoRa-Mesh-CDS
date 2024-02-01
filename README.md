@@ -13,3 +13,7 @@ https://www.researchgate.net/publication/373217182_Infrastructure-less_Long-Rang
   year={2023},<br>
   organization={IEEE}<br>
 }
+
+Tested on Heltec LoRa V3 (ESP32-S3) microcontrollers<br>
+LoRa library: https://github.com/ehong-tl/micropySX126X <br>
+
