@@ -2,7 +2,7 @@
 
 Ad-hoc LoRa mesh implementation that uses a Connected Dominated Set (CDS) as a network backbone.
 
-Pieces of this work have been proposed in:<br>
+Pieces of this work have been presented in:<br>
 https://www.researchgate.net/publication/373217182_Infrastructure-less_Long-Range_Text-Messaging_System
 
 @inproceedings{baimukhanov2023infrastructure,<br>
