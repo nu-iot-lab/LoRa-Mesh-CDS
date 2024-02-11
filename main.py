@@ -11,7 +11,7 @@ from sx1262 import SX1262
 from hashlib import sha256
 from binascii import hexlify
 from micropython import const
-from machine import SoftI2C, Pin, Timer
+from machine import SoftI2C, Pin, Timer, I2C
 
 # Packet type codings
 BEACON = const(1)
@@ -46,19 +46,28 @@ def generate_mac_address():
 #                                   *
 #************************************
 rst = Pin(21, Pin.OUT)
+rst.value(0)
+time.sleep_ms(5)
 rst.value(1)
+time.sleep_ms(5)
 scl = Pin(18, Pin.OUT, Pin.PULL_UP)
 sda = Pin(17, Pin.OUT, Pin.PULL_UP)
-i2c = SoftI2C(scl=scl, sda=sda, freq=450000)
-oled = ssd1306.SSD1306_I2C(128, 64, i2c, addr=0x3c)
-oled.poweron()
+i2c = SoftI2C(scl=scl, sda=sda)
+oled = ssd1306.SSD1306_I2C(128, 64, i2c)
 
-def show_on_screen(s1, s2, s3):
+def show_on_screen(msg, cds=None):
     oled.fill(0)
-    oled.text(s1, 0, 0)
-    oled.text(s2, 0, 10)
-    oled.text(s3, 0, 20)
+    oled.text("LoRa Mesh CDS", 0, 0)
+    if cds:
+        oled.text(f"Dominant: {'yes' if cds.is_dominator else 'no'}", 0, 10)
+        oled.text(f"Nbrs: {len(cds.nbrs_dict)}", 0, 20)
+        oled.text(f"Sent pkts: {num_sent_pkts}", 0, 30)
+        oled.text(f"Rcvd pkts: {num_rcvd_pkts}", 0, 40)
+    oled.hline(0, 53, 127,1)
+    oled.text(msg, 0, 56)
     oled.show()
+    
+show_on_screen("Starting...", None)
 
 #************************************
 #                                   *
@@ -81,6 +90,8 @@ BUSY = 13
 lora = SX1262(1, SCK, MOSI, MISO, CS, RX, RST, BUSY)
 lora.begin(freq=868.5, bw=125.0, sf=7)
 
+num_sent_pkts = 0
+num_rcvd_pkts = 0
 
 #************************************
 #                                   *
@@ -202,8 +213,10 @@ class CDS:
     def __send_nbr_set(self, packet_type):
         if packet_type == NEIGHBOR_SET:
             print("ALARM: broadcasting my neighbors with type NEIGHBOR_SET")
+            show_on_screen("sent nbrs_set", self)
         else:
             print("ALARM: broadcasting my neighbors with type UPD_NEIGHBOR_SET")
+            show_on_screen("sent nbrs_set", self)
         packet = bytes([packet_type]) + self.mac_addr
         for nbr_mac in self.nbrs_dict.keys():
             packet += nbr_mac
@@ -219,6 +232,7 @@ class CDS:
             return
 
         print("ALARM: checking leavers")
+        show_on_screen("checking leavers", self)
 
         did_delete_neighbor = False
 
@@ -230,7 +244,7 @@ class CDS:
                 del self.nbrs_dict[id]
                 did_delete_neighbor = True
                 # neighbor set changed, so notify neighbors about the changes
-                self.__send_nbr_set(type=UPD_NEIGHBOR_SET)
+                self.__send_nbr_set(UPD_NEIGHBOR_SET)
 
         # if someone disconnected, only dominant nbrs might change their
         # dominance state, it does not affect non-dominant nbrs
@@ -273,8 +287,7 @@ class CDS:
                 packet = bytes([BEACON]) + self.mac_addr + bytes([1])
                 self.lora_send(packet)
                 print("sent beacon")
-                oled.fill(BLUE)
-                oled.show()
+                show_on_screen("I am dominant", self)
                 return
             # if my single nbr has other nbrs, then I am an edge node and
             # not dominant
@@ -317,8 +330,7 @@ class CDS:
                             packet = bytes([BEACON]) + self.mac_addr + bytes([1])
                             self.lora_send(packet)
                             print("sent beacon")
-                            oled.fill(BLUE)
-                            oled.show()
+                            show_on_screen("I am dominant", self)
                             return
                         # if my nbr set is a subset, then I shouldn't be dominant
                         elif my_nbr_set < third_nbr_nbr_set:
@@ -343,8 +355,7 @@ class CDS:
                                 packet = bytes([BEACON]) + self.mac_addr + bytes([1])
                                 self.lora_send(packet)
                                 print("sent beacon")
-                                oled.fill(BLUE)
-                                oled.show()
+                                show_on_screen("I am dominant", self)
                                 return
                             else:
                                 self.is_dominator = 0
@@ -371,8 +382,7 @@ class CDS:
                             packet = bytes([BEACON]) + self.mac_addr + bytes([1])
                             self.lora_send(packet)
                             print("sent beacon")
-                            oled.fill(BLUE)
-                            oled.show()
+                            show_on_screen("I am dominant", self)
                             return
 
                     # if here, then there is no third nbr that connects
@@ -383,8 +393,7 @@ class CDS:
                     packet = bytes([BEACON]) + self.mac_addr + bytes([1])
                     self.lora_send(packet)
                     print("sent beacon")
-                    oled.fill(BLUE)
-                    oled.show()
+                    show_on_screen("I am dominant", self)
                     return
 
         # if here, then all nbrs are connected; need to check whether
@@ -424,8 +433,7 @@ class CDS:
         packet = bytes([BEACON]) + self.mac_addr + bytes([1])
         self.lora_send(packet)
         print("sent beacon")
-        oled.fill(BLUE)
-        oled.show()
+        show_on_screen("I am dominant", self)
         return
 
 
@@ -440,6 +448,7 @@ class CDS:
         packet = bytes([BEACON]) + self.mac_addr + bytes([self.is_dominator])
         self.lora_send(packet)
         print(f"sent beacon {packet}")
+        show_on_screen("sent beacon", self)
 
 
     # upon receiving the beacon packet, the node pulls out nbr mac address,
@@ -450,6 +459,7 @@ class CDS:
     # to CDS update.
     def process_beacon(self, recv_pkg):
         print("\nreceived beacon:", recv_pkg)
+        
         nbr_rssi = self.lora.getRSSI()
         nbr_mac_addr = recv_pkg[1:7]
         is_nbr_dominant = recv_pkg[7]
@@ -474,6 +484,7 @@ class CDS:
                 r = int.from_bytes(r, "big") / 255
                 self.__enter_nbr_discovery_state(delay_s=30 + r * 10, first_time=False)
 
+        show_on_screen("rcvd beacon", self)
         print("\nneighbors:")
         for n in self.nbrs_dict.keys():
             print(n, ":", self.nbrs_dict[n])
@@ -481,6 +492,7 @@ class CDS:
 
     def process_neighbor_set(self, recv_pkg):
         print("got neighbor set:", recv_pkg)
+        show_on_screen("rcvd nbrs_set", self)
         # structure of received packet:
         # [2, 1st_hop_nbr_mac, 2nd_hop_nbr_mac, rssi, 2nd_hop_nbr_mac, rssi, ... ]
 
@@ -531,7 +543,7 @@ class CDS:
 
 # sends message by LoRa
 # generates id's for messages
-def send_text_lora(msg):
+def send_text_lora(msg, cds):
     # setting 1 byte for packet type
     packet_type = bytes([TEXT_MESSAGE])
 
@@ -555,13 +567,19 @@ def send_text_lora(msg):
     packet = packet_type + id + hop_limit + cks + msg
 
     lora.send(packet)
+    global num_sent_pkts
+    num_sent_pkts += 1
     print("Sent packet of length", len(packet), "with text", packet)
+    show_on_screen("sent packet", cds)
 
-def process_text_message(recv_pkg):
+def process_text_message(recv_pkg, cds):
+    global num_rcvd_pkts
+    num_rcvd_pkts += 1
+    show_on_screen("rcvd packet", cds)
     id = recv_pkg[1:5]
     hop_limit = recv_pkg[5]
     checksum = recv_pkg[6:10]
-    msg = recv_pkg[10:].decode("utf-8")
+    msg = recv_pkg[10:]
 
     # calculating header checksum for comparison
     cks = sha256(id + bytes([hop_limit]))
@@ -580,6 +598,8 @@ def process_text_message(recv_pkg):
     if len(msg) > 0:
         if ">" not in msg:
             return
+        
+        
 
         #if id not in message_ids:
         if True:
@@ -594,9 +614,7 @@ def process_text_message(recv_pkg):
             # for client in websocket_clients:
             #     ws_send_message(client, msg)
 
-    #is_dominant = cds.get_is_dominant()
-    is_dominant = 1
-    if is_dominant and hop_limit > 0:
+    if is_dominator and hop_limit > 0:
         hop_limit -= 1
         # calculating new header checksum and forwarding the packet
         new_cks = sha256(id + bytes([hop_limit]))
@@ -620,11 +638,13 @@ def process_reply_prev_msg(recv_pkg):
 def receive_lora(event):
     if event & SX1262.RX_DONE:
         global lock
+        global cds
+        recv_pkg = None
         try:
             recv_pkg, err = lora.recv()
         except Exception as e:
             print("exception ", e)
-        if type(recv_pkg) != bytes:
+        if recv_pkg is None or not isinstance(recv_pkg, bytes):
             return
         if len(recv_pkg) <= 0:
             return
@@ -633,7 +653,7 @@ def receive_lora(event):
         packet_type = recv_pkg[0]
         # no switch case in micropython(
         if packet_type == TEXT_MESSAGE:
-            process_text_message(recv_pkg)
+            process_text_message(recv_pkg, cds)
         elif packet_type == BEACON:
             cds.process_beacon(recv_pkg)
         elif packet_type == NEIGHBOR_SET or packet_type == UPD_NEIGHBOR_SET:
@@ -646,7 +666,7 @@ def receive_lora(event):
             print("wrong packet type")
             return
     elif event & SX1262.TX_DONE:
-        print('sending')
+        print('sent packet')
 
 
 #********************************
@@ -660,10 +680,12 @@ cds = CDS(lora)
 
 def sending_beacons():
     while True:
+        time.sleep(3)
         cds.send_beacon()
 
 _thread.start_new_thread(sending_beacons, ())
 
 while True:
     # cds.__send_nbr_set(NEIGHBOR_SET)
-    time.sleep(3)
+    time.sleep(80)
+    send_text_lora("packet packet packet", cds)
